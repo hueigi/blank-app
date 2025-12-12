@@ -12,8 +12,9 @@ scope = [
     "https://www.googleapis.com/auth/drive.readonly"
 ]
 
-creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
-client = gspread.authorize(creds)
+creds_dict = dict(st.secrets["gspread"])
+# Convert multi-line private key properly
+creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
 
 SHEET_ID = "1Uecp6hM7EridbdZczfo7cxlF9n_SX4jYKiJAPTGn3o4"
 WORKSHEET_NAME = "sheet1"
