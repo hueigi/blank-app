@@ -4,6 +4,8 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import plotly.express as px
 import time
+from streamlit_autorefresh import st_autorefresh
+
 
 st.set_page_config(page_title="Live Sensor Dashboard", layout="wide")
 
@@ -49,7 +51,7 @@ def get_data():
 # ------------------------------
 # Auto-refresh every 60s
 # ------------------------------
-st_autorefresh = st.experimental_rerun
+st_autorefresh(interval=60000, key="datarefresh")
 
 df = get_data()
 
