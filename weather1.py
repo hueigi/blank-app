@@ -15,8 +15,8 @@ scope = [
 creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
 client = gspread.authorize(creds)
 
-SHEET_ID = "YOUR_GOOGLE_SHEET_ID"
-WORKSHEET_NAME = "Sheet1"
+SHEET_ID = "1Uecp6hM7EridbdZczfo7cxlF9n_SX4jYKiJAPTGn3o4"
+WORKSHEET_NAME = "sheet1"
 sheet = client.open_by_key(SHEET_ID).worksheet(WORKSHEET_NAME)
 
 COLUMN_NAMES = [
