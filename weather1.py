@@ -10,9 +10,9 @@ from streamlit_autorefresh import st_autorefresh
 SHEET_ID = "1DGkrU18QI7dItEiVZvMhBPMJNA2dSMSD1HvR6jK1E44"
 WORKSHEET_DATA_NAME = "Data"
 WORKSHEET_ARCHIVE_NAME = "Archive"
+# ... (rest of configuration)
 
 # Column names must match the order of your Python logger's output
-# Note: The Archive sheet uses 'Hour_Start' instead of 'Timestamp' for the first column
 COLUMN_NAMES = [
     "timestamp", "temp1", "humidity1", "temp2", "humidity2",
     "light1", "light2", "UV", "temp3", "humidity3", "pressure"
@@ -23,38 +23,43 @@ ARCHIVE_COLUMN_NAMES = [
 ]
 
 # ------------------------------
-# Google Sheets Authentication
+# Google Sheets Authentication (Helper Function)
 # ------------------------------
-st.set_page_config(page_title="Live Sensor Dashboard", layout="wide")
+@st.cache_resource
+def get_gspread_client():
+    """Authenticates and returns the gspread client. Cached with st.cache_resource."""
+    try:
+        creds_dict = dict(st.secrets["gspread"])
+        creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
 
-try:
-    creds_dict = dict(st.secrets["gspread"])
-    creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+        scope = [
+            "https://www.googleapis.com/auth/spreadsheets.readonly",
+            "https://www.googleapis.com/auth/drive.readonly"
+        ]
 
-    scope = [
-        "https://www.googleapis.com/auth/spreadsheets.readonly",
-        "https://www.googleapis.com/auth/drive.readonly"
-    ]
-
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    client = gspread.authorize(creds)
-    
-    # Open both worksheets
-    spreadsheet = client.open_by_key(SHEET_ID)
-    data_sheet = spreadsheet.worksheet(WORKSHEET_DATA_NAME)
-    archive_sheet = spreadsheet.worksheet(WORKSHEET_ARCHIVE_NAME)
-
-except Exception as e:
-    st.error(f"Authentication or Sheet connection error: {e}. Please check secrets and sheet ID.")
-    st.stop()
-
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        client = gspread.authorize(creds)
+        return client
+    except Exception as e:
+        st.error(f"Authentication error: {e}")
+        return None
 
 # ------------------------------
-# Function to fetch and process data from the 'Data' sheet (10s/1m res)
+# Function to fetch data from the 'Data' sheet (10s/1m res)
 # ------------------------------
-@st.cache_data(ttl=60)  # refresh cache every 60 seconds
-def get_data(sheet):
-    """Fetches and processes the high-resolution data from the main sheet."""
+@st.cache_data(ttl=60)
+def get_data(sheet_id, worksheet_name):
+    """Fetches and processes the high-resolution data."""
+    client = get_gspread_client()
+    if not client:
+        return pd.DataFrame(columns=COLUMN_NAMES)
+        
+    try:
+        sheet = client.open_by_key(sheet_id).worksheet(worksheet_name)
+    except Exception as e:
+        st.error(f"Could not open worksheet {worksheet_name}: {e}")
+        return pd.DataFrame(columns=COLUMN_NAMES)
+        
     raw = sheet.get_all_values()
     if len(raw) <= 1:
         return pd.DataFrame(columns=COLUMN_NAMES)
@@ -69,19 +74,27 @@ def get_data(sheet):
     return df
 
 # ------------------------------
-# Function to fetch and process data from the 'Archive' sheet (1h res)
+# Function to fetch data from the 'Archive' sheet (1h res)
 # ------------------------------
-@st.cache_data(ttl=3600)  # Archive data changes slowly, refresh hourly
-def get_archive_data(sheet):
-    """Fetches and processes the hourly consolidated data from the archive sheet."""
+@st.cache_data(ttl=3600)
+def get_archive_data(sheet_id, worksheet_name):
+    """Fetches and processes the hourly consolidated data."""
+    client = get_gspread_client()
+    if not client:
+        return pd.DataFrame(columns=ARCHIVE_COLUMN_NAMES)
+        
+    try:
+        sheet = client.open_by_key(sheet_id).worksheet(worksheet_name)
+    except Exception as e:
+        st.error(f"Could not open worksheet {worksheet_name}: {e}")
+        return pd.DataFrame(columns=ARCHIVE_COLUMN_NAMES)
+        
     raw = sheet.get_all_values()
     if len(raw) <= 1:
         return pd.DataFrame(columns=ARCHIVE_COLUMN_NAMES)
         
-    # Use ARCHIVE_COLUMN_NAMES for processing
     df_archive = pd.DataFrame(raw[1:], columns=ARCHIVE_COLUMN_NAMES)
     
-    # Rename 'Hour_Start' to 'timestamp' to match the main DataFrame
     df_archive.rename(columns={'Hour_Start': 'timestamp'}, inplace=True)
     
     # Convert types
@@ -93,26 +106,22 @@ def get_archive_data(sheet):
 
 
 # ------------------------------
-# Auto-refresh every 60s
+# Auto-refresh and Data Loading
 # ------------------------------
-# Refreshing the screen will call get_data() and get_archive_data()
+st.set_page_config(page_title="Live Sensor Dashboard", layout="wide")
 st_autorefresh(interval=60000, key="datarefresh")
 
+# Fetch both DataFrames
+df_data = get_data(SHEET_ID, WORKSHEET_DATA_NAME)
+df_archive = get_archive_data(SHEET_ID, WORKSHEET_ARCHIVE_NAME)
 
-# --- Fetch and Combine DataFrames ---
-df_data = get_data(data_sheet)
-df_archive = get_archive_data(archive_sheet)
+# --- Combine DataFrames (Logic remains the same) ---
+# ... (rest of the combination and plotting logic from your previous response)
 
-# Ensure the combined DataFrame uses the standard COLUMN_NAMES for all columns
-# Drop the last row of the archive sheet if its timestamp overlaps with the first row of the data sheet.
+# --- Combination Logic ---
 if not df_archive.empty and not df_data.empty:
-    # Find the latest timestamp in the archive
     latest_archive_time = df_archive['timestamp'].max()
-    
-    # Filter the high-resolution data to only include newer points (to prevent duplication)
     df_data_filtered = df_data[df_data['timestamp'] > latest_archive_time]
-    
-    # Concatenate the archive data and the filtered new data
     df_combined = pd.concat([df_archive, df_data_filtered], ignore_index=True)
 elif df_archive.empty:
     df_combined = df_data
@@ -123,21 +132,17 @@ if df_combined.empty:
     st.warning("No data found in either the 'Data' or 'Archive' sheets.")
     st.stop()
     
-# Sort the final combined DataFrame by timestamp
 df_combined.sort_values(by='timestamp', inplace=True)
 
-
 # ------------------------------
-# Dashboard Title and Display
+# Dashboard Title and Plotting
 # ------------------------------
 st.title("🌡️ Live Weather Station Dashboard")
 
 st.markdown(f"**Current Resolution:** 10s (Today) / 1m (Last 7 Days) / 1h (Archived)")
 st.caption(f"Showing **{len(df_combined):,}** data points, ranging from **{df_combined['timestamp'].min().strftime('%Y-%m-%d')}** to **{df_combined['timestamp'].max().strftime('%Y-%m-%d %H:%M')}**.")
 
-# ------------------------------
 # Temperature plot (using df_combined)
-# ------------------------------
 temp_fig = px.line(
     df_combined, x="timestamp", y=["temp1", "temp2", "temp3"],
     labels={"value": "Temperature (°C)", "timestamp": "Time"},  
@@ -146,9 +151,7 @@ temp_fig = px.line(
 )
 st.plotly_chart(temp_fig, use_container_width=True)
 
-# ------------------------------
 # Humidity plot (using df_combined)
-# ------------------------------
 hum_fig = px.line(
     df_combined, x="timestamp", y=["humidity1", "humidity2", "humidity3"],
     labels={"value": "Relative Humidity (%)", "timestamp": "Time"},  
@@ -157,9 +160,7 @@ hum_fig = px.line(
 )
 st.plotly_chart(hum_fig, use_container_width=True)
 
-# ------------------------------
 # Light, UV, and Pressure Plots
-# ------------------------------
 col1, col2, col3 = st.columns(3)
 
 with col1:
